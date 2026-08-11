@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>Kaadi3</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="rotate-overlay">
+    <div class="rotate-icon">⟳</div>
+    <div>Please rotate your device to landscape</div>
+  </div>
+
+  <button id="btn-leave" class="leave-btn" style="display:none">✕ Leave</button>
+
+  <div id="app">
+    <!-- HOME -->
+    <section id="screen-home" class="screen">
+      <div class="home-card">
+        <h1>Kaadi3</h1>
+        <input id="name-input" maxlength="20" placeholder="Your name" autocomplete="off" />
+        <div class="home-actions">
+          <div class="home-col">
+            <h3>Create Room</h3>
+            <label class="small-label">Number of players</label>
+            <div id="num-players-picker" class="chip-row">
+              <button class="chip" data-n="5">5</button>
+              <button class="chip" data-n="6">6</button>
+              <button class="chip" data-n="7">7</button>
+              <button class="chip" data-n="8">8</button>
+            </div>
+            <button id="btn-create" class="btn primary">Create Room</button>
+          </div>
+          <div class="divider">or</div>
+          <div class="home-col">
+            <h3>Join Room</h3>
+            <input id="join-code-input" maxlength="5" placeholder="ROOM CODE" autocomplete="off" style="text-transform:uppercase" />
+            <button id="btn-join" class="btn secondary">Join Room</button>
+          </div>
+        </div>
+        <div id="home-error" class="error-text"></div>
+      </div>
+    </section>
+
+    <!-- LOBBY -->
+    <section id="screen-lobby" class="screen">
+      <div class="lobby-wrap">
+        <div class="lobby-header">
+          <div>Room Code</div>
+          <div id="lobby-code" class="room-code"></div>
+        </div>
+        <div id="lobby-players" class="lobby-players"></div>
+        <div id="lobby-host-controls" class="lobby-host-controls">
+          <button id="btn-start" class="btn primary" disabled>Waiting for players…</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- GAME -->
+    <section id="screen-game" class="screen">
+      <div id="game-topbar">
+        <div id="dealer-caller-info" class="topbar-left"></div>
+        <div id="phase-banner" class="topbar-mid"></div>
+        <div class="badge-cluster">
+          <div id="power-badge" class="power-badge" style="display:none">
+            <div class="partner-badge-title">Power</div>
+            <div id="power-badge-suit" class="power-badge-suit"></div>
+          </div>
+          <div id="partner-badge" class="partner-badge" style="display:none">
+            <div class="partner-badge-title">Partner call</div>
+            <div id="partner-badge-cards" class="partner-badge-cards"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="table-area"></div>
+
+      <div id="action-panel"></div>
+
+      <div id="hand-row" class="hand-row"></div>
+
+      <div id="score-table-wrap">
+        <div id="score-table-toggle">Scores ▾</div>
+        <table id="score-table"></table>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast" class="toast" style="display:none"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
