@@ -1,13 +1,33 @@
+import logging
 import os
 import random
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("kaadi3")
 
 import cards as C
 from game import Room, gen_room_code, PHASE_LOBBY, PHASE_PLAYING
 
 app = FastAPI()
+
+
+class NoCacheMiddleware(BaseHTTPMiddleware):
+    """Force the client to always revalidate index.html/app.js/style.css
+    with the server instead of serving a stale cached copy after a deploy.
+    'no-cache' still allows a fast 304 when the file is unchanged -- it just
+    guarantees a real deploy is never masked by the browser's own cache."""
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
+app.add_middleware(NoCacheMiddleware)
 
 rooms: dict[str, Room] = {}
 room_conns: dict[str, dict[str, WebSocket]] = {}
@@ -119,138 +139,159 @@ async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
     code = None
     pid = None
+
+    async def handle(msg: dict):
+        nonlocal code, pid
+        mtype = msg.get("type")
+
+        if mtype == "ping":
+            await websocket.send_json({"type": "pong"})
+            return
+
+        if mtype == "create_room":
+            name = (msg.get("name") or "").strip()[:20]
+            num_players = msg.get("numPlayers")
+            if not name:
+                await send_error(websocket, "Enter a name")
+                return
+            if num_players not in (5, 6, 7, 8):
+                await send_error(websocket, "Pick 5-8 players")
+                return
+            new_code = gen_room_code(rooms.keys())
+            room = Room(new_code)
+            room.set_num_players(num_players)
+            try:
+                player = room.add_player(name)
+            except ValueError:
+                await send_error(websocket, "Could not create room")
+                return
+            rooms[new_code] = room
+            await register_conn(new_code, player.id, websocket)
+            code, pid = new_code, player.id
+            await websocket.send_json({"type": "joined", "code": code, "playerId": pid})
+            await broadcast(room)
+
+        elif mtype == "join_room":
+            jcode = (msg.get("code") or "").strip().upper()
+            name = (msg.get("name") or "").strip()[:20]
+            room = rooms.get(jcode)
+            if not room:
+                await send_error(websocket, "Room not found")
+                return
+            if not name:
+                await send_error(websocket, "Enter a name")
+                return
+            if room.name_taken(name):
+                await websocket.send_json({"type": "name_taken"})
+                return
+            try:
+                player = room.add_player(name)
+            except ValueError as e:
+                reason = str(e)
+                if reason == "room_full":
+                    await send_error(websocket, "Room is full")
+                elif reason == "game_in_progress":
+                    await send_error(websocket, "Game already in progress")
+                else:
+                    await send_error(websocket, "Could not join room")
+                return
+            code, pid = jcode, player.id
+            await register_conn(code, pid, websocket)
+            await websocket.send_json({"type": "joined", "code": code, "playerId": pid})
+            await broadcast(room)
+
+        elif mtype == "rejoin":
+            jcode = (msg.get("code") or "").strip().upper()
+            jpid = msg.get("playerId")
+            room = rooms.get(jcode)
+            if not room or jpid not in room.players:
+                # Room no longer exists (e.g. the server process restarted --
+                # a free-tier host can be replaced on deploys/maintenance,
+                # which wipes all in-memory game state). Tell the client
+                # explicitly so it can drop the stale session instead of
+                # sitting frozen on the last screen it rendered.
+                await websocket.send_json({"type": "session_gone"})
+                return
+            code, pid = jcode, jpid
+            room.players[pid].connected = True
+            await register_conn(code, pid, websocket)
+            await websocket.send_json({"type": "joined", "code": code, "playerId": pid})
+            await broadcast(room)
+
+        else:
+            room = rooms.get(code) if code else None
+            if not room or not pid:
+                await send_error(websocket, "Not in a room")
+                return
+
+            if mtype == "set_num_players":
+                if pid != room.host_id or room.phase != PHASE_LOBBY:
+                    raise ValueError("not allowed")
+                room.set_num_players(msg.get("numPlayers"))
+            elif mtype == "start_game":
+                if pid != room.host_id:
+                    raise ValueError("only host can start")
+                room.start_game(random.Random())
+            elif mtype == "bid":
+                seat = room.player_seat.get(pid)
+                room.round.place_bid(seat, int(msg.get("amount")))
+            elif mtype == "pass":
+                seat = room.player_seat.get(pid)
+                room.round.pass_bid(seat)
+            elif mtype == "select_power_color":
+                seat = room.player_seat.get(pid)
+                room.round.select_power_color(seat, msg.get("suit"))
+            elif mtype == "select_partner":
+                seat = room.player_seat.get(pid)
+                room.round.select_partner(seat, msg.get("suit"), msg.get("rank"), int(msg.get("occurrence", 1)))
+            elif mtype == "play_card":
+                seat = room.player_seat.get(pid)
+                room.round.play_card(seat, msg.get("cardId"))
+            elif mtype == "next_round":
+                if pid != room.host_id:
+                    raise ValueError("only host can advance")
+                room.start_next_round(random.Random())
+            elif mtype == "leave_room":
+                room.remove_player_reset_session(pid)
+                room_conns.get(code, {}).pop(pid, None)
+                if not room.players:
+                    rooms.pop(code, None)
+                    room_conns.pop(code, None)
+                await broadcast(room)
+                code = pid = None
+                return
+            else:
+                raise ValueError(f"unknown message type {mtype}")
+
+            await broadcast(room)
+
     try:
         while True:
             msg = await websocket.receive_json()
-            mtype = msg.get("type")
-
-            if mtype == "ping":
-                await websocket.send_json({"type": "pong"})
-                continue
-
-            if mtype == "create_room":
-                name = (msg.get("name") or "").strip()[:20]
-                num_players = msg.get("numPlayers")
-                if not name:
-                    await send_error(websocket, "Enter a name")
-                    continue
-                if num_players not in (5, 6, 7, 8):
-                    await send_error(websocket, "Pick 5-8 players")
-                    continue
-                new_code = gen_room_code(rooms.keys())
-                room = Room(new_code)
-                room.set_num_players(num_players)
-                try:
-                    player = room.add_player(name)
-                except ValueError:
-                    await send_error(websocket, "Could not create room")
-                    continue
-                rooms[new_code] = room
-                await register_conn(new_code, player.id, websocket)
-                code, pid = new_code, player.id
-                await websocket.send_json({"type": "joined", "code": code, "playerId": pid})
-                await broadcast(room)
-
-            elif mtype == "join_room":
-                jcode = (msg.get("code") or "").strip().upper()
-                name = (msg.get("name") or "").strip()[:20]
-                room = rooms.get(jcode)
-                if not room:
-                    await send_error(websocket, "Room not found")
-                    continue
-                if not name:
-                    await send_error(websocket, "Enter a name")
-                    continue
-                if room.name_taken(name):
-                    await websocket.send_json({"type": "name_taken"})
-                    continue
-                try:
-                    player = room.add_player(name)
-                except ValueError as e:
-                    reason = str(e)
-                    if reason == "room_full":
-                        await send_error(websocket, "Room is full")
-                    elif reason == "game_in_progress":
-                        await send_error(websocket, "Game already in progress")
-                    else:
-                        await send_error(websocket, "Could not join room")
-                    continue
-                code, pid = jcode, player.id
-                await register_conn(code, pid, websocket)
-                await websocket.send_json({"type": "joined", "code": code, "playerId": pid})
-                await broadcast(room)
-
-            elif mtype == "rejoin":
-                jcode = (msg.get("code") or "").strip().upper()
-                jpid = msg.get("playerId")
-                room = rooms.get(jcode)
-                if not room or jpid not in room.players:
-                    await send_error(websocket, "Session not found")
-                    continue
-                code, pid = jcode, jpid
-                room.players[pid].connected = True
-                await register_conn(code, pid, websocket)
-                await websocket.send_json({"type": "joined", "code": code, "playerId": pid})
-                await broadcast(room)
-
-            else:
-                room = rooms.get(code) if code else None
-                if not room or not pid:
-                    await send_error(websocket, "Not in a room")
-                    continue
-
-                try:
-                    if mtype == "set_num_players":
-                        if pid != room.host_id or room.phase != PHASE_LOBBY:
-                            raise ValueError("not allowed")
-                        room.set_num_players(msg.get("numPlayers"))
-                    elif mtype == "start_game":
-                        if pid != room.host_id:
-                            raise ValueError("only host can start")
-                        room.start_game(random.Random())
-                    elif mtype == "bid":
-                        seat = room.player_seat.get(pid)
-                        room.round.place_bid(seat, int(msg.get("amount")))
-                    elif mtype == "pass":
-                        seat = room.player_seat.get(pid)
-                        room.round.pass_bid(seat)
-                    elif mtype == "select_power_color":
-                        seat = room.player_seat.get(pid)
-                        room.round.select_power_color(seat, msg.get("suit"))
-                    elif mtype == "select_partner":
-                        seat = room.player_seat.get(pid)
-                        room.round.select_partner(seat, msg.get("suit"), msg.get("rank"), int(msg.get("occurrence", 1)))
-                    elif mtype == "play_card":
-                        seat = room.player_seat.get(pid)
-                        room.round.play_card(seat, msg.get("cardId"))
-                    elif mtype == "next_round":
-                        if pid != room.host_id:
-                            raise ValueError("only host can advance")
-                        room.start_next_round(random.Random())
-                    elif mtype == "leave_room":
-                        room.remove_player_reset_session(pid)
-                        room_conns.get(code, {}).pop(pid, None)
-                        if not room.players:
-                            rooms.pop(code, None)
-                            room_conns.pop(code, None)
-                        await broadcast(room)
-                        code = pid = None
-                        continue
-                    else:
-                        raise ValueError(f"unknown message type {mtype}")
-                except ValueError as e:
-                    await send_error(websocket, str(e))
-                    continue
-
-                await broadcast(room)
+            try:
+                await handle(msg)
+            except ValueError as e:
+                await send_error(websocket, str(e))
+            except Exception:
+                # A bug in handling one message must never take the whole
+                # connection (or, worse, other players' connections) down --
+                # log it, tell this client something went wrong, and keep
+                # the socket alive so their session survives.
+                logger.exception("unhandled error handling message: %r", msg)
+                await send_error(websocket, "Something went wrong -- please try again")
 
     except WebSocketDisconnect:
+        pass
+    finally:
         if code and pid and code in rooms:
             room = rooms[code]
             if pid in room.players:
                 room.players[pid].connected = False
             room_conns.get(code, {}).pop(pid, None)
-            await broadcast(room)
+            try:
+                await broadcast(room)
+            except Exception:
+                logger.exception("error broadcasting after disconnect")
 
 
 app.mount("/", StaticFiles(directory=PUBLIC_DIR, html=True), name="static")

@@ -79,9 +79,12 @@ function startHeartbeat() {
     send({ type: "ping" });
     clearTimeout(heartbeatTimeout);
     heartbeatTimeout = setTimeout(() => {
-      // no pong came back in time -- treat the connection as dead
+      // no pong came back in time -- treat the connection as dead.
+      // Kept generous: the host runs on a very CPU-limited free tier, and a
+      // tight timeout here causes false-positive "disconnects" under load
+      // that just add more reconnect churn.
       try { ws.close(); } catch (e) {}
-    }, 8000);
+    }, 18000);
   }, 20000);
 }
 
@@ -101,7 +104,7 @@ document.addEventListener("visibilitychange", () => {
   } else if (ws.readyState === WebSocket.OPEN) {
     send({ type: "ping" });
     clearTimeout(heartbeatTimeout);
-    heartbeatTimeout = setTimeout(() => { try { ws.close(); } catch (e) {} }, 5000);
+    heartbeatTimeout = setTimeout(() => { try { ws.close(); } catch (e) {} }, 12000);
   }
 });
 
@@ -115,6 +118,15 @@ function handleMessage(msg) {
     myCode = msg.code;
     localStorage.setItem("kaadi3_session", JSON.stringify({ code: myCode, playerId: myId }));
     $("home-error").textContent = "";
+  } else if (msg.type === "session_gone") {
+    // The room no longer exists server-side (e.g. the host process
+    // restarted). Don't leave the player frozen on a stale screen --
+    // drop back to home so they can start or join a fresh game.
+    localStorage.removeItem("kaadi3_session");
+    myId = null;
+    state = null;
+    render();
+    toast("Your game session ended (server restarted) — start or join a new game.");
   } else if (msg.type === "name_taken") {
     $("home-error").textContent = "That name is taken in this room — pick another.";
   } else if (msg.type === "error") {
