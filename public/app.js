@@ -26,13 +26,27 @@ function toast(msg) {
 }
 
 // ---------------- connection ----------------
+// A heartbeat is required because many mobile/carrier NATs silently kill an
+// idle TCP connection after 30-60s -- the browser's WebSocket object is left
+// as a zombie that still reports readyState OPEN and never fires onclose,
+// so without an app-level ping/pong there is no way to detect the dead
+// connection short of the user manually refreshing.
+let connecting = false;
+let heartbeatInterval = null;
+let heartbeatTimeout = null;
+let reconnectTimer = null;
+
 function connect() {
+  if (connecting) return;
+  connecting = true;
   if (new URLSearchParams(location.search).has("reset")) {
     localStorage.removeItem("kaadi3_session");
   }
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws`);
   ws.onopen = () => {
+    connecting = false;
+    startHeartbeat();
     const saved = JSON.parse(localStorage.getItem("kaadi3_session") || "null");
     if (saved && saved.code && saved.playerId) {
       send({ type: "rejoin", code: saved.code, playerId: saved.playerId });
@@ -40,12 +54,56 @@ function connect() {
   };
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
+    if (msg.type === "pong") { clearTimeout(heartbeatTimeout); return; }
     handleMessage(msg);
   };
   ws.onclose = () => {
-    setTimeout(connect, 1500);
+    connecting = false;
+    stopHeartbeat();
+    scheduleReconnect();
+  };
+  ws.onerror = () => {
+    try { ws.close(); } catch (e) {}
   };
 }
+
+function scheduleReconnect(delay = 1200) {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(connect, delay);
+}
+
+function startHeartbeat() {
+  stopHeartbeat();
+  heartbeatInterval = setInterval(() => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    send({ type: "ping" });
+    clearTimeout(heartbeatTimeout);
+    heartbeatTimeout = setTimeout(() => {
+      // no pong came back in time -- treat the connection as dead
+      try { ws.close(); } catch (e) {}
+    }, 8000);
+  }, 20000);
+}
+
+function stopHeartbeat() {
+  clearInterval(heartbeatInterval);
+  clearTimeout(heartbeatTimeout);
+}
+
+// Mobile browsers frequently suspend background tabs (app switch, screen
+// lock). When the player comes back, verify the socket actually still
+// works rather than waiting for a normal reconnect cycle to notice.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+    clearTimeout(reconnectTimer);
+    connect();
+  } else if (ws.readyState === WebSocket.OPEN) {
+    send({ type: "ping" });
+    clearTimeout(heartbeatTimeout);
+    heartbeatTimeout = setTimeout(() => { try { ws.close(); } catch (e) {} }, 5000);
+  }
+});
 
 function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
@@ -147,7 +205,7 @@ function renderLobby() {
     if (!hint) {
       hint = document.createElement("div");
       hint.className = "hint";
-      hint.style.fontSize = "12px";
+      hint.style.fontSize = "14px";
       hint.style.opacity = "0.8";
       ctrl.appendChild(hint);
     }
@@ -185,6 +243,14 @@ function cardFaceHTML(card) {
 
 let lastTrickKeys = new Set();
 let lastHandCount = -1;
+let lastResolvedKey = null;
+
+function seatPos(seat, mySeat, n, rx, ry) {
+  const rel = (seat - mySeat + n) % n;
+  const angle = 90 + rel * (360 / n); // degrees, 90 = bottom (you)
+  const rad = (angle * Math.PI) / 180;
+  return { x: 50 + rx * Math.cos(rad), y: 50 + ry * Math.sin(rad), angle };
+}
 
 function renderGame() {
   const r = state.round || {};
@@ -260,18 +326,25 @@ function renderTable(r, mySeat) {
   const area = $("table-area");
   area.innerHTML = "";
   const n = state.numPlayers;
+
+  // detect a trick that just resolved (table cleared, a fresh lastTrick to show)
+  let justResolvedWinner = null;
+  if (r.lastTrick && (r.trickCards || []).length === 0) {
+    const resolvedKey = "t" + (r.trickNumber - 1) + "-" + r.lastTrick.winner_seat + "-" +
+      r.lastTrick.cards.map((c) => c.card.id).join(",");
+    if (resolvedKey !== lastResolvedKey) {
+      lastResolvedKey = resolvedKey;
+      justResolvedWinner = r.lastTrick.winner_seat;
+    }
+  }
+
   const ring = document.createElement("div");
   ring.className = "seat-ring";
   for (let seat = 0; seat < n; seat++) {
-    const rel = (seat - mySeat + n) % n;
-    const angle = 90 + rel * (360 / n); // degrees, 90 = bottom (you)
-    const rad = (angle * Math.PI) / 180;
-    const rx = 42, ry = 38; // ellipse radii in %
-    const x = 50 + rx * Math.cos(rad);
-    const y = 50 + ry * Math.sin(rad);
+    const { x, y } = seatPos(seat, mySeat, n, 42, 38);
     const p = seatPlayer(seat);
     const el = document.createElement("div");
-    el.className = "seat" + (r.turnSeat === seat ? " turn" : "");
+    el.className = "seat" + (r.turnSeat === seat ? " turn" : "") + (seat === justResolvedWinner ? " seat-won" : "");
     el.style.left = x + "%";
     el.style.top = y + "%";
     const tags = [];
@@ -293,12 +366,7 @@ function renderTable(r, mySeat) {
     const c = e.card;
     const key = e.seat + ":" + c.id;
     currentKeys.add(key);
-    const rel = (e.seat - mySeat + n) % n;
-    const angle = 90 + rel * (360 / n);
-    const rad = (angle * Math.PI) / 180;
-    const rx = 10, ry = 8; // small cluster radius, % of table-area
-    const x = 50 + rx * Math.cos(rad);
-    const y = 50 + ry * Math.sin(rad);
+    const { x, y } = seatPos(e.seat, mySeat, n, 10, 8); // small cluster radius, % of table-area
     const rot = ((e.seat * 53) % 30) - 15; // deterministic pseudo-random tilt
     const isNew = !lastTrickKeys.has(key);
 
@@ -315,6 +383,29 @@ function renderTable(r, mySeat) {
     center.appendChild(slot);
   });
   lastTrickKeys = currentKeys;
+
+  if (justResolvedWinner !== null) {
+    const areaRect = area.getBoundingClientRect();
+    const target = seatPos(justResolvedWinner, mySeat, n, 42, 38);
+    r.lastTrick.cards.forEach((e, i) => {
+      const c = e.card;
+      const start = seatPos(e.seat, mySeat, n, 10, 8);
+      const dxPx = ((target.x - start.x) / 100) * areaRect.width;
+      const dyPx = ((target.y - start.y) / 100) * areaRect.height;
+      const rot = ((e.seat * 53) % 30) - 15;
+      const slot = document.createElement("div");
+      slot.className = "trick-slot sweep-slot";
+      slot.style.left = start.x + "%";
+      slot.style.top = start.y + "%";
+      slot.style.setProperty("--srot", rot + "deg");
+      slot.style.setProperty("--dx", dxPx + "px");
+      slot.style.setProperty("--dy", dyPx + "px");
+      slot.style.animationDelay = i * 40 + "ms";
+      slot.style.zIndex = String(300 + i);
+      slot.innerHTML = `<div class="card ${cardColorClass(c.suit)}">${cardFaceHTML(c)}</div>`;
+      center.appendChild(slot);
+    });
+  }
   area.appendChild(center);
 }
 
@@ -392,7 +483,7 @@ function renderActionPanel(r, mySeat) {
     const info = document.createElement("div");
     info.style.width = "100%";
     info.style.textAlign = "center";
-    info.style.fontSize = "12px";
+    info.style.fontSize = "14px";
     info.style.marginBottom = "4px";
     info.textContent = `Pick partner ${filled + 1} of ${r.partnersNeeded} — scroll to choose color, number${state.numDecks === 2 ? ", and 1st/2nd" : ""}`;
     panel.appendChild(info);
@@ -471,7 +562,7 @@ function renderActionPanel(r, mySeat) {
     card.innerHTML = `
       <h2>${won ? "Caller's team WINS the round" : "Caller's team LOSES the round"}</h2>
       <div>${seatName(res.caller_seat)} called ${res.bid_amount}, team scored ${res.caller_points}</div>
-      <div style="margin-top:8px;font-size:12px;">
+      <div style="margin-top:8px;font-size:14px;">
         ${state.players.map((p) => `${p.name}: ${res.deltas[p.seat] >= 0 ? "+" : ""}${res.deltas[p.seat]}`).join(" &nbsp; ")}
       </div>
     `;
@@ -486,7 +577,7 @@ function renderActionPanel(r, mySeat) {
     } else {
       const w = document.createElement("div");
       w.style.marginTop = "10px";
-      w.style.fontSize = "12px";
+      w.style.fontSize = "14px";
       w.textContent = "Waiting for host to start next round…";
       card.appendChild(w);
     }

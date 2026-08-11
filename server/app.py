@@ -124,6 +124,10 @@ async def ws_endpoint(websocket: WebSocket):
             msg = await websocket.receive_json()
             mtype = msg.get("type")
 
+            if mtype == "ping":
+                await websocket.send_json({"type": "pong"})
+                continue
+
             if mtype == "create_room":
                 name = (msg.get("name") or "").strip()[:20]
                 num_players = msg.get("numPlayers")
