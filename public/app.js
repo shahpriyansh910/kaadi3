@@ -624,6 +624,14 @@ function renderHand(r, mySeat) {
     row.appendChild(el);
   });
   lastHandCount = hand.length;
+
+  // justify-content:center on a horizontally-scrolling flex row is a known
+  // trap: when content is wider than the container, half the overflow sits
+  // on the *leading* edge, which a scroll container can never reach
+  // (scrollLeft can't go negative) -- those cards become permanently
+  // invisible. Only center when everything actually fits; otherwise
+  // left-align so every card is reachable by scrolling.
+  row.style.justifyContent = row.scrollWidth > row.clientWidth ? "flex-start" : "center";
 }
 
 function renderScoreTable() {

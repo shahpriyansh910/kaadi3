@@ -238,7 +238,8 @@ class Round:
         power = self.power_color
         played = self.trick_cards
 
-        def strength(entry):
+        def strength(indexed_entry):
+            idx, entry = indexed_entry
             c = entry["card"]
             if c["suit"] == power:
                 bucket = 2 if power != lead else 1
@@ -246,9 +247,13 @@ class Round:
                 bucket = 1
             else:
                 bucket = 0
-            return (bucket, C.RANK_INDEX[c["rank"]])
+            # In a 2-deck game the exact same card (suit+rank) can be played
+            # twice in one trick. On a true tie the later-played copy wins --
+            # include play order so Python's max() (which otherwise keeps the
+            # first of equal items) breaks the tie the right way.
+            return (bucket, C.RANK_INDEX[c["rank"]], idx)
 
-        winner_entry = max(played, key=strength)
+        _, winner_entry = max(enumerate(played), key=strength)
         winner_seat = winner_entry["seat"]
         pts = sum(e["card"]["points"] for e in played)
         self.points_won[winner_seat] += pts

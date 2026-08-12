@@ -86,20 +86,19 @@ html, body {
 .lobby-host-controls { text-align: center; font-size: 14px; }
 
 /* ---------- game screen ---------- */
-#screen-game { padding: 8px 10px; gap: 8px; }
-#game-topbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 40px; padding-left: 100px; flex-shrink: 0; }
-.topbar-left { font-size: 13px; opacity: .85; }
-.topbar-mid { font-size: 16px; font-weight: 700; color: var(--gold); text-align: center; flex: 1; }
-.badge-cluster { display: flex; gap: 7px; align-items: stretch; }
+#screen-game { padding: 6px 10px; gap: 6px; }
+#game-topbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding-left: 100px; flex-shrink: 0; }
+.topbar-left { font-size: 12px; opacity: .85; }
+.topbar-mid { font-size: 14px; font-weight: 700; color: var(--gold); text-align: center; flex: 1; }
+.badge-cluster { display: flex; gap: 6px; align-items: center; }
 .partner-badge, .power-badge {
-  background: var(--bg2); border: 1px solid var(--gold); border-radius: 12px; padding: 5px 10px;
-  text-align: center; min-width: 52px;
+  background: var(--bg2); border: 1px solid var(--gold); border-radius: 10px; padding: 3px 8px;
+  display: flex; align-items: center; justify-content: center; min-height: 26px;
   animation: badgePop .35s cubic-bezier(.34,1.56,.64,1);
 }
-.partner-badge-title { font-size: 10px; opacity: .8; }
 .partner-badge-cards { display: flex; gap: 3px; justify-content: center; }
-.mini-card { font-size: 13px; background: var(--cream); color: var(--dark); border-radius: 4px; padding: 2px 6px; font-weight: 700; }
-.power-badge-suit { font-size: 24px; line-height: 1; }
+.mini-card { font-size: 12px; background: var(--cream); color: var(--dark); border-radius: 4px; padding: 2px 6px; font-weight: 700; }
+.power-badge-suit { font-size: 19px; line-height: 1; }
 @keyframes badgePop {
   0% { opacity: 0; transform: scale(.4) translateY(-8px); }
   100% { opacity: 1; transform: scale(1) translateY(0); }
@@ -180,7 +179,7 @@ html, body {
 .suit-black { color: #1a1a1a; }
 
 #action-panel {
-  min-height: 50px; display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap;
+  min-height: 40px; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap;
   flex-shrink: 0; /* never let flexbox compress this smaller than its content needs --
                      table-area is the one region built to give up space first */
 }
@@ -196,8 +195,8 @@ html, body {
 .partner-col-item.selected { background: var(--gold); color: var(--dark); }
 
 .hand-row {
-  display: flex; justify-content: center; overflow-x: auto; overflow-y: hidden;
-  padding: 6px 4px; min-height: calc(var(--card-h) + 60px); align-items: center;
+  display: flex; overflow-x: auto; overflow-y: hidden;
+  padding: 4px; min-height: calc(var(--card-h) + 46px); align-items: center;
   flex-shrink: 0;
 }
 .hand-card {
