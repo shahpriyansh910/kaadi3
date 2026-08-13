@@ -257,6 +257,16 @@ let lastTrickKeys = new Set();
 let lastHandCount = -1;
 let lastResolvedKey = null;
 
+const AVATAR_COLORS = [
+  "#c0392b", "#2980b9", "#8e44ad", "#16a085",
+  "#d35400", "#27ae60", "#2c5f8a", "#a8325e",
+];
+function avatarColor(name) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return AVATAR_COLORS[hash % AVATAR_COLORS.length];
+}
+
 function seatPos(seat, mySeat, n, rx, ry) {
   const rel = (seat - mySeat + n) % n;
   const angle = 90 + rel * (360 / n); // degrees, 90 = bottom (you)
@@ -359,13 +369,18 @@ function renderTable(r, mySeat) {
     el.className = "seat" + (r.turnSeat === seat ? " turn" : "") + (seat === justResolvedWinner ? " seat-won" : "");
     el.style.left = x + "%";
     el.style.top = y + "%";
-    const tags = [];
-    if (r.callerSeat === seat) tags.push("C");
-    if (state.dealerSeat === seat) tags.push("D");
     const pw = r.pointsWon ? r.pointsWon[seat] : undefined;
+    const name = p ? p.name : "empty";
+    const initial = name.charAt(0).toUpperCase();
     el.innerHTML = `
-      <div class="seat-name"><span class="seat-dot ${p && p.connected ? "" : "off"}"></span>${p ? p.name : "empty"}${seat === mySeat ? " (you)" : ""}</div>
-      <div class="seat-tags">${tags.join(" ")}${pw !== undefined ? ` · ${pw}pt` : ""}</div>
+      <div class="seat-avatar" style="background:${avatarColor(name)}">
+        ${initial}
+        <span class="seat-status-dot ${p && p.connected ? "" : "off"}"></span>
+        ${state.dealerSeat === seat ? '<span class="seat-mini-badge dealer">D</span>' : ""}
+        ${r.callerSeat === seat ? '<span class="seat-mini-badge caller">C</span>' : ""}
+      </div>
+      <div class="seat-label">${name}${seat === mySeat ? " (you)" : ""}</div>
+      ${pw !== undefined ? `<div class="seat-points">${pw}pt</div>` : ""}
     `;
     ring.appendChild(el);
   }
@@ -607,12 +622,37 @@ function renderHand(r, mySeat) {
   const n = hand.length;
   const center = (n - 1) / 2;
   const angleStep = Math.min(6, 42 / Math.max(n, 1));
+
+  // CSS `transform` never counts toward an element's scrollable overflow,
+  // and overflow-x:auto forces overflow-y to behave as auto too (can't mix
+  // visible/non-visible per spec) -- so the fanned/rotated cards WILL get
+  // silently clipped unless the row's actual layout height already
+  // contains their full rotated extent. A fixed CSS buffer can't get this
+  // right across every hand size and every clamp()'d card size, so compute
+  // it for real: probe the resolved card height, then work out how far the
+  // most-rotated card swings around its off-center pivot.
+  const probe = document.createElement("div");
+  probe.className = "card";
+  probe.style.visibility = "hidden";
+  probe.style.position = "absolute";
+  row.appendChild(probe);
+  const cardH = probe.offsetHeight || 90;
+  probe.remove();
+
+  const maxOffset = n > 1 ? Math.max(center, n - 1 - center) : 0;
+  const maxTy = Math.pow(maxOffset, 1.3) * 2.6;
+  const maxRotRad = (maxOffset * angleStep * Math.PI) / 180;
+  const pivotDist = cardH * 1.08; // matches transform-origin: 50% 108%
+  const swing = pivotDist * (1 - Math.cos(maxRotRad));
+  const topMargin = 10;
+  row.style.minHeight = Math.ceil(topMargin + cardH + maxTy + swing + 10) + "px";
+
   hand.forEach((c, i) => {
     const el = document.createElement("div");
     const isLegal = canPlay && legal.has(c.id);
     const offset = i - center;
     const rot = offset * angleStep;
-    const ty = Math.pow(Math.abs(offset), 1.3) * 2.6;
+    const ty = topMargin + Math.pow(Math.abs(offset), 1.3) * 2.6;
     el.style.setProperty("--rot", rot + "deg");
     el.style.setProperty("--ty", ty + "px");
     el.style.zIndex = String(i);
@@ -635,12 +675,19 @@ function renderHand(r, mySeat) {
 }
 
 function renderScoreTable() {
-  const tbl = $("score-table");
+  const wrap = $("score-table");
   const rows = state.players.slice().sort((a, b) => a.seat - b.seat);
-  tbl.innerHTML = `
-    <tr>${rows.map((p) => `<th>${p.name}${p.isHost ? " ★" : ""}</th>`).join("")}</tr>
-    <tr>${rows.map((p) => `<td>${p.sessionScore}</td>`).join("")}</tr>
-  `;
+  wrap.innerHTML = rows.map((p) => {
+    const val = p.sessionScore;
+    const initial = p.name.charAt(0).toUpperCase();
+    return `
+      <div class="score-chip">
+        <span class="chip-avatar" style="background:${avatarColor(p.name)}">${initial}</span>
+        <span class="chip-name">${p.name}${p.isHost ? " ★" : ""}</span>
+        <span class="chip-value${val < 0 ? " negative" : ""}">${val >= 0 ? "+" : ""}${val}</span>
+      </div>
+    `;
+  }).join("");
 }
 $("score-table-toggle").addEventListener("click", () => {
   $("score-table").classList.toggle("open");

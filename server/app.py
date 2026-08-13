@@ -104,13 +104,17 @@ def serialize_room(room: Room, viewer_id: str):
 async def broadcast(room: Room):
     conns = room_conns.get(room.code, {})
     dead = []
-    for pid, ws in conns.items():
+    for pid, ws in list(conns.items()):
         try:
             await ws.send_json(serialize_room(room, pid))
         except Exception:
-            dead.append(pid)
-    for pid in dead:
-        conns.pop(pid, None)
+            dead.append((pid, ws))
+    for pid, ws in dead:
+        # Same identity check as the disconnect handler: the `await` above
+        # yields control, so a reconnect could have already replaced this
+        # pid's entry with a fresh working socket by the time we get here.
+        if conns.get(pid) is ws:
+            conns.pop(pid, None)
 
 
 async def send_error(ws: WebSocket, message: str):
@@ -285,13 +289,23 @@ async def ws_endpoint(websocket: WebSocket):
     finally:
         if code and pid and code in rooms:
             room = rooms[code]
-            if pid in room.players:
-                room.players[pid].connected = False
-            room_conns.get(code, {}).pop(pid, None)
-            try:
-                await broadcast(room)
-            except Exception:
-                logger.exception("error broadcasting after disconnect")
+            conns = room_conns.get(code, {})
+            # Only clean up if THIS socket is still the one on record for pid.
+            # A refresh opens a new connection that calls register_conn(),
+            # which re-registers pid under the new socket and closes this
+            # old one -- that close then lands us here too. Without this
+            # identity check we would blindly pop the *new* connection out
+            # of room_conns (since pop only cares about the key, not which
+            # socket it points to), silently dropping the just-reconnected
+            # player from every future broadcast until they refreshed again.
+            if conns.get(pid) is websocket:
+                if pid in room.players:
+                    room.players[pid].connected = False
+                conns.pop(pid, None)
+                try:
+                    await broadcast(room)
+                except Exception:
+                    logger.exception("error broadcasting after disconnect")
 
 
 app.mount("/", StaticFiles(directory=PUBLIC_DIR, html=True), name="static")
