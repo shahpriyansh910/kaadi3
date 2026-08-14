@@ -278,10 +278,11 @@ function renderGame() {
   const r = state.round || {};
   const mySeat = state.you.seat;
 
-  // topbar left: dealer + your team hint
-  let left = `Dealer: ${seatName(state.dealerSeat)}`;
-  if (r.teamOfYou) left += ` · Your team: ${r.teamOfYou === "caller" ? "Caller's" : "Opposition"}`;
-  $("dealer-caller-info").textContent = left;
+  // topbar left: your (secret) team only -- dealer is already shown via the
+  // "D" badge on their avatar, no need to repeat it here.
+  $("dealer-caller-info").textContent = r.teamOfYou
+    ? `Your team: ${r.teamOfYou === "caller" ? "Caller's" : "Opposition"}`
+    : "";
 
   $("phase-banner").textContent = phaseBannerText(r);
 
@@ -302,9 +303,9 @@ function phaseBannerText(r) {
     case "power_color":
       return `${seatName(r.callerSeat)} (C) called ${r.bidAmount} — choosing power color…`;
     case "partner_select":
-      return `${seatName(r.callerSeat)} (C) — power ${SUIT_SYMBOL[r.powerColor]} — choosing partner${r.partnersNeeded > 1 ? "s" : ""}…`;
+      return `${seatName(r.callerSeat)} (C) — choosing partner${r.partnersNeeded > 1 ? "s" : ""}…`;
     case "playing":
-      return `Trick ${r.trickNumber} — power ${SUIT_SYMBOL[r.powerColor]} — ${seatName(r.turnSeat)}'s turn`;
+      return `${seatName(r.turnSeat)}'s turn`;
     case "round_end":
       return "Round over";
     default:
@@ -335,10 +336,11 @@ function renderPartnerBadge(r) {
   cont.innerHTML = "";
   r.partnerRequests.forEach((p) => {
     const el = document.createElement("div");
-    el.className = "mini-card " + cardColorClass(p.suit);
+    el.className = "mini-card " + cardColorClass(p.suit) + (p.revealed ? " revealed" : "");
+    // symbols only -- who holds it (once revealed) shows as a "P" badge on
+    // their own avatar instead, not spelled out here.
     let txt = `${p.rank}${SUIT_SYMBOL[p.suit]}`;
-    if (state.numDecks === 2) txt += p.occurrence === 2 ? " (2nd)" : " (1st)";
-    if (p.revealed) txt += ` = ${seatPlayer(p.ownerSeat) ? seatPlayer(p.ownerSeat).name : "?"}`;
+    if (state.numDecks === 2) txt += p.occurrence === 2 ? "②" : "①";
     el.textContent = txt;
     cont.appendChild(el);
   });
@@ -372,12 +374,15 @@ function renderTable(r, mySeat) {
     const pw = r.pointsWon ? r.pointsWon[seat] : undefined;
     const name = p ? p.name : "empty";
     const initial = name.charAt(0).toUpperCase();
+    const isRevealedPartner = seat !== r.callerSeat &&
+      (r.partnerRequests || []).some((req) => req.revealed && req.ownerSeat === seat);
     el.innerHTML = `
       <div class="seat-avatar" style="background:${avatarColor(name)}">
         ${initial}
         <span class="seat-status-dot ${p && p.connected ? "" : "off"}"></span>
         ${state.dealerSeat === seat ? '<span class="seat-mini-badge dealer">D</span>' : ""}
         ${r.callerSeat === seat ? '<span class="seat-mini-badge caller">C</span>' : ""}
+        ${isRevealedPartner ? '<span class="seat-mini-badge partner">P</span>' : ""}
       </div>
       <div class="seat-label">${name}${seat === mySeat ? " (you)" : ""}</div>
       ${pw !== undefined && (r.phase === "playing" || r.phase === "round_end") ? `<div class="seat-points">${pw}pt</div>` : ""}
@@ -647,6 +652,65 @@ function renderHand(r, mySeat) {
   const cssCardH = probe.offsetHeight || 90;
   probe.remove();
 
+  const availW = Math.max(row.clientWidth, 1) - 10;
+  const overlapKeep = 0.58;
+  const minFanCardW = 34; // below this a single-row fan gets too cramped to read -- wrap to a 2nd row instead
+
+  // Would the whole hand fit on one row even shrunk down to the smallest
+  // acceptable size? (+8% safety margin for rotation making a tilted card's
+  // painted bounding box wider than its plain CSS width.) If not, don't
+  // shrink further -- wrap into as many rows as needed at a readable size.
+  const oneRowWidthAtMin = n > 1 ? minFanCardW * (1 + (n - 1) * overlapKeep) * 1.08 : 0;
+  const useWrap = n > 1 && oneRowWidthAtMin > availW;
+  row.classList.toggle("wrap-mode", useWrap);
+
+  if (useWrap) {
+    // Target exactly 2 rows: size cards so ceil(n/2) fit per row, so the
+    // (perRow+1)-th card naturally wraps -- rather than using the full
+    // default size and letting the browser wrap wherever, which on a
+    // narrow screen with many cards could sprawl into far more than 2 rows.
+    // Re-measure width now (wrap-mode's own padding differs from fan-mode's,
+    // so the earlier availW no longer applies exactly).
+    const wrapAvailW = Math.max(row.clientWidth, 1) - 12; // wrap-mode's own left+right padding
+    const perRow = Math.ceil(n / 2);
+    const gap = 6; // must match .wrap-mode's column-gap in CSS
+    const wrapCardW = Math.max(30, Math.min(cssCardW, (wrapAvailW - (perRow - 1) * gap) / perRow) - 1);
+    const wrapCardH = wrapCardW * (cssCardH / cssCardW);
+    row.style.setProperty("--card-w", wrapCardW + "px");
+    row.style.setProperty("--card-h", wrapCardH + "px");
+    row.style.minHeight = "";
+    row.style.maxHeight = "";
+    row.style.justifyContent = "center";
+    row.classList.remove("scrollable");
+    hand.forEach((c, i) => {
+      const el = document.createElement("div");
+      const isLegal = canPlay && legal.has(c.id);
+      el.style.zIndex = String(i);
+      el.className = "card hand-card wrap-card " + cardColorClass(c.suit) + (canPlay && !isLegal ? " disabled" : "") + (isFreshDeal ? " deal-in" : "");
+      if (isFreshDeal) el.style.animationDelay = (i * 20) + "ms";
+      el.innerHTML = cardFaceHTML(c);
+      if (isLegal) el.onclick = () => send({ type: "play_card", cardId: c.id });
+      row.appendChild(el);
+    });
+    lastHandCount = hand.length;
+
+    // The CSS max-height formula (var(--card-h)*2 + padding) assumes every
+    // row is exactly one card tall, but a card's *rendered* height can run
+    // a bit past --card-h (borders, sub-pixel rounding), and it's cheaper
+    // to just measure the real thing than keep massaging the formula. Skip
+    // for fresh deals -- the deal-in animation's mid-flight positions make
+    // scrollHeight meaningless until it settles.
+    const applyWrapHeight = () => {
+      if (lastHandCount !== hand.length) return; // hand changed again before this ran
+      const needed = row.scrollHeight;
+      row.style.maxHeight = Math.ceil(needed) + "px";
+    };
+    if (isFreshDeal) setTimeout(applyWrapHeight, 420);
+    else applyWrapHeight();
+    return;
+  }
+
+  // ---- single-row fan (existing behavior) ----
   // Cards overlap by 42% of their own width (see .hand-card margin-left),
   // so N cards need roughly cardW * (1 + (N-1)*0.58) of horizontal space --
   // that's a starting guess, not exact, because it ignores that a *rotated*
@@ -656,10 +720,8 @@ function renderHand(r, mySeat) {
   // via a locally-set CSS custom property -- doesn't touch the table's
   // trick-display cards) so the whole fan fits the tray's actual width
   // outright, then correct the guess against the real measured result.
-  const availW = Math.max(row.clientWidth, 1) - 10;
-  const overlapKeep = 0.58;
   const widthDrivenW = n > 0 ? availW / (1 + (n - 1) * overlapKeep) : cssCardW;
-  let cardW = Math.max(20, Math.min(cssCardW, widthDrivenW));
+  let cardW = Math.max(minFanCardW, Math.min(cssCardW, widthDrivenW));
   let cardH = cardW * (cssCardH / cssCardW);
   row.style.setProperty("--card-w", cardW + "px");
   row.style.setProperty("--card-h", cardH + "px");
@@ -695,7 +757,7 @@ function renderHand(r, mySeat) {
     const targetW = row.clientWidth;
     if (realW > targetW + 1) {
       const ratio = (targetW - 6) / realW;
-      cardW = Math.max(20, cardW * ratio);
+      cardW = Math.max(minFanCardW, cardW * ratio);
       cardH = cardW * (cssCardH / cssCardW);
       row.style.setProperty("--card-w", cardW + "px");
       row.style.setProperty("--card-h", cardH + "px");
@@ -740,7 +802,7 @@ function renderHand(r, mySeat) {
       const curW = parseFloat(row.style.getPropertyValue("--card-w")) || cardW;
       const ratio = (row.clientWidth - 6) / row.scrollWidth;
       if (ratio < 0.999) {
-        const newW = Math.max(20, curW * ratio);
+        const newW = Math.max(minFanCardW, curW * ratio);
         const newH = newW * (cssCardH / cssCardW);
         row.style.setProperty("--card-w", newW + "px");
         row.style.setProperty("--card-h", newH + "px");

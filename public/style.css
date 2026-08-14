@@ -112,10 +112,17 @@ html, body {
 
 /* ---------- game screen ---------- */
 #screen-game { padding: 6px 10px; gap: 6px; }
-#game-topbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding-left: 100px; flex-shrink: 0; }
-.topbar-left { font-size: 12px; opacity: .85; }
-.topbar-mid { font-size: 13px; font-weight: 700; color: var(--gold); text-align: center; flex: 1; font-family: var(--font-body); letter-spacing: .2px; }
-.badge-cluster { display: flex; gap: 6px; align-items: center; }
+/* flex-wrap so the badge cluster drops to its own row instead of spilling
+   off-screen when a 2-deck game's power+2-partner badges get too wide for
+   a narrow portrait screen to fit alongside the team/turn text -- same
+   "wrap instead of overflow" approach used for the hand tray. The leave
+   button's reserved space lives on .topbar-left (the actual first item)
+   rather than as container padding, so a wrapped 2nd line isn't handicapped
+   by space it doesn't need. */
+#game-topbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; min-height: 30px; flex-shrink: 0; }
+.topbar-left { font-size: 12px; opacity: .85; margin-left: 100px; }
+.topbar-mid { font-size: 13px; font-weight: 700; color: var(--gold); text-align: center; flex: 1 1 auto; min-width: 0; font-family: var(--font-body); letter-spacing: .2px; }
+.badge-cluster { display: flex; gap: 6px; align-items: center; margin-left: auto; }
 .partner-badge, .power-badge {
   background: linear-gradient(160deg, #17624a, #0c3626); border: 1px solid rgba(230,191,92,.6); border-radius: 10px; padding: 3px 8px;
   display: flex; align-items: center; justify-content: center; min-height: 26px;
@@ -124,6 +131,7 @@ html, body {
 }
 .partner-badge-cards { display: flex; gap: 3px; justify-content: center; }
 .mini-card { font-size: 12px; background: linear-gradient(160deg,#fffdf6,#ecdfb8); color: var(--dark); border-radius: 4px; padding: 2px 6px; font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+.mini-card.revealed { box-shadow: 0 0 0 1.5px #4a90d9, 0 1px 3px rgba(0,0,0,.3); }
 .power-badge-suit { font-size: 19px; line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,.4)); }
 @keyframes badgePop {
   0% { opacity: 0; transform: scale(.4) translateY(-8px); }
@@ -185,6 +193,11 @@ html, body {
 }
 .seat-mini-badge.dealer { left: -4px; background: var(--cream); color: var(--dark); }
 .seat-mini-badge.caller { right: -4px; background: var(--gold); color: var(--dark); }
+.seat-mini-badge.partner {
+  left: -4px; top: -3px; bottom: auto;
+  background: #4a90d9; color: #fff;
+  animation: badgePop .3s cubic-bezier(.34,1.56,.64,1);
+}
 .seat-label {
   font-size: 11px; font-weight: 700; color: var(--cream);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 90px;
@@ -283,6 +296,19 @@ html, body {
   mask-image: linear-gradient(to right, transparent 0, black 18px, black calc(100% - 18px), transparent 100%);
   -webkit-mask-image: linear-gradient(to right, transparent 0, black 18px, black calc(100% - 18px), transparent 100%);
 }
+/* Too many cards to fan into one legible row: lay them out in a plain
+   wrapping grid instead of shrinking further. Capped height (not just
+   "grow forever") so the table above doesn't get squeezed away -- if a
+   hand somehow needs more than 2 rows' worth, this scrolls internally
+   rather than eating into the play area. */
+.hand-row.wrap-mode {
+  flex-wrap: wrap; align-content: flex-start; justify-content: center;
+  gap: 8px 6px; padding: 8px 6px; min-height: 0;
+  max-height: calc(var(--card-h) * 2 + 30px);
+  overflow-y: auto; overflow-x: hidden;
+  mask-image: none; -webkit-mask-image: none;
+}
+.wrap-card { margin-left: 0 !important; }
 .hand-card {
   flex: 0 0 auto; cursor: pointer;
   transition: transform .15s cubic-bezier(.2,.8,.3,1.3), box-shadow .15s, margin-top .15s;
