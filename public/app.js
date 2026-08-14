@@ -634,29 +634,38 @@ function renderHand(r, mySeat) {
   const center = (n - 1) / 2;
   const angleStep = Math.min(6, 42 / Math.max(n, 1));
 
-  // CSS `transform` never counts toward an element's scrollable overflow,
-  // and overflow-x:auto forces overflow-y to behave as auto too (can't mix
-  // visible/non-visible per spec) -- so the fanned/rotated cards WILL get
-  // silently clipped unless the row's actual layout height already
-  // contains their full rotated extent. A fixed CSS buffer can't get this
-  // right across every hand size and every clamp()'d card size, so compute
-  // it for real: probe the resolved card height, then work out how far the
-  // most-rotated card swings around its off-center pivot.
+  // Probe the CSS clamp()-driven "default" card size (nice and big when
+  // there's room to spare).
+  row.style.removeProperty("--card-w");
+  row.style.removeProperty("--card-h");
   const probe = document.createElement("div");
   probe.className = "card";
   probe.style.visibility = "hidden";
   probe.style.position = "absolute";
   row.appendChild(probe);
-  const cardH = probe.offsetHeight || 90;
+  const cssCardW = probe.offsetWidth || 60;
+  const cssCardH = probe.offsetHeight || 90;
   probe.remove();
 
+  // Cards overlap by 42% of their own width (see .hand-card margin-left),
+  // so N cards need roughly cardW * (1 + (N-1)*0.58) of horizontal space --
+  // that's a starting guess, not exact, because it ignores that a *rotated*
+  // card's painted bounding box is wider than its nominal CSS width (the
+  // fan cards are tilted). Rather than let the overflow become a scroll the
+  // player has to discover, shrink the card (scoped to just this hand tray
+  // via a locally-set CSS custom property -- doesn't touch the table's
+  // trick-display cards) so the whole fan fits the tray's actual width
+  // outright, then correct the guess against the real measured result.
+  const availW = Math.max(row.clientWidth, 1) - 10;
+  const overlapKeep = 0.58;
+  const widthDrivenW = n > 0 ? availW / (1 + (n - 1) * overlapKeep) : cssCardW;
+  let cardW = Math.max(20, Math.min(cssCardW, widthDrivenW));
+  let cardH = cardW * (cssCardH / cssCardW);
+  row.style.setProperty("--card-w", cardW + "px");
+  row.style.setProperty("--card-h", cardH + "px");
+
   const maxOffset = n > 1 ? Math.max(center, n - 1 - center) : 0;
-  const maxTy = Math.pow(maxOffset, 1.3) * 2.6;
-  const maxRotRad = (maxOffset * angleStep * Math.PI) / 180;
-  const pivotDist = cardH * 1.08; // matches transform-origin: 50% 108%
-  const swing = pivotDist * (1 - Math.cos(maxRotRad));
   const topMargin = 10;
-  row.style.minHeight = Math.ceil(topMargin + cardH + maxTy + swing + 10) + "px";
 
   hand.forEach((c, i) => {
     const el = document.createElement("div");
@@ -676,12 +685,36 @@ function renderHand(r, mySeat) {
   });
   lastHandCount = hand.length;
 
+  // Now measure the *real* painted width (rotation included) and correct:
+  // updating the custom property reflows every card to the new size
+  // instantly, no need to rebuild them. Skip while cards are still
+  // mid deal-in animation (transform is in flux, measurement unreliable);
+  // the settle-pass below re-checks after it finishes.
+  if (!isFreshDeal && n > 0) {
+    const realW = row.scrollWidth;
+    const targetW = row.clientWidth;
+    if (realW > targetW + 1) {
+      const ratio = (targetW - 6) / realW;
+      cardW = Math.max(20, cardW * ratio);
+      cardH = cardW * (cssCardH / cssCardW);
+      row.style.setProperty("--card-w", cardW + "px");
+      row.style.setProperty("--card-h", cardH + "px");
+    }
+  }
+
+  const maxTy = Math.pow(maxOffset, 1.3) * 2.6;
+  const maxRotRad = (maxOffset * angleStep * Math.PI) / 180;
+  const pivotDist = cardH * 1.08; // matches transform-origin: 50% 108%
+  const swing = pivotDist * (1 - Math.cos(maxRotRad));
+  row.style.minHeight = Math.ceil(topMargin + cardH + maxTy + swing + 10) + "px";
+
   // justify-content:center on a horizontally-scrolling flex row is a known
   // trap: when content is wider than the container, half the overflow sits
   // on the *leading* edge, which a scroll container can never reach
   // (scrollLeft can't go negative) -- those cards become permanently
   // invisible. Only center when everything actually fits; otherwise
-  // left-align so every card is reachable by scrolling.
+  // left-align so every card is reachable by scrolling. (Should rarely
+  // trigger now that width is corrected above -- kept as a fallback.)
   const overflowing = row.scrollWidth > row.clientWidth;
   row.style.justifyContent = overflowing ? "flex-start" : "center";
   row.classList.toggle("scrollable", overflowing);
@@ -699,12 +732,31 @@ function renderHand(r, mySeat) {
     if (lastHandCount !== handSizeAtSchedule) return; // a newer hand has since rendered
     const rowRect = row.getBoundingClientRect();
     if (rowRect.height === 0) return; // not visible right now
+
+    // Width: fresh deals skip the measure-and-correct pass above (transform
+    // is mid-animation, unreliable to measure) -- check for real now that
+    // it's settled, and shrink if still too wide.
+    if (row.scrollWidth > row.clientWidth + 1) {
+      const curW = parseFloat(row.style.getPropertyValue("--card-w")) || cardW;
+      const ratio = (row.clientWidth - 6) / row.scrollWidth;
+      if (ratio < 0.999) {
+        const newW = Math.max(20, curW * ratio);
+        const newH = newW * (cssCardH / cssCardW);
+        row.style.setProperty("--card-w", newW + "px");
+        row.style.setProperty("--card-h", newH + "px");
+      }
+    }
+    const stillOverflowing = row.scrollWidth > row.clientWidth;
+    row.style.justifyContent = stillOverflowing ? "flex-start" : "center";
+    row.classList.toggle("scrollable", stillOverflowing);
+
+    // Height: same idea as above, but for vertical clipping.
     let maxBottom = -Infinity;
     row.querySelectorAll(".hand-card").forEach((el) => {
       const cr = el.getBoundingClientRect();
       if (cr.bottom > maxBottom) maxBottom = cr.bottom;
     });
-    const overBy = maxBottom - rowRect.bottom;
+    const overBy = maxBottom - row.getBoundingClientRect().bottom;
     if (overBy > 0.5) {
       const current = parseFloat(row.style.minHeight) || 0;
       row.style.minHeight = Math.ceil(current + overBy + 6) + "px";
