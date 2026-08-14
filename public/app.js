@@ -380,7 +380,7 @@ function renderTable(r, mySeat) {
         ${r.callerSeat === seat ? '<span class="seat-mini-badge caller">C</span>' : ""}
       </div>
       <div class="seat-label">${name}${seat === mySeat ? " (you)" : ""}</div>
-      ${pw !== undefined ? `<div class="seat-points">${pw}pt</div>` : ""}
+      ${pw !== undefined && (r.phase === "playing" || r.phase === "round_end") ? `<div class="seat-points">${pw}pt</div>` : ""}
     `;
     ring.appendChild(el);
   }
@@ -514,6 +514,17 @@ function renderActionPanel(r, mySeat) {
     info.style.marginBottom = "4px";
     info.textContent = `Pick partner ${filled + 1} of ${r.partnersNeeded} — scroll to choose color, number${state.numDecks === 2 ? ", and 1st/2nd" : ""}`;
     panel.appendChild(info);
+    if (state.numDecks === 2) {
+      const hint = document.createElement("div");
+      hint.style.width = "100%";
+      hint.style.textAlign = "center";
+      hint.style.fontSize = "11px";
+      hint.style.opacity = "0.65";
+      hint.style.marginTop = "-2px";
+      hint.style.marginBottom = "4px";
+      hint.textContent = "1st/2nd = which copy was dealt out, not who plays it first — the partner reveals when whoever holds that exact copy plays it";
+      panel.appendChild(hint);
+    }
 
     const picker = document.createElement("div");
     picker.className = "partner-picker";
@@ -671,7 +682,34 @@ function renderHand(r, mySeat) {
   // (scrollLeft can't go negative) -- those cards become permanently
   // invisible. Only center when everything actually fits; otherwise
   // left-align so every card is reachable by scrolling.
-  row.style.justifyContent = row.scrollWidth > row.clientWidth ? "flex-start" : "center";
+  const overflowing = row.scrollWidth > row.clientWidth;
+  row.style.justifyContent = overflowing ? "flex-start" : "center";
+  row.classList.toggle("scrollable", overflowing);
+
+  // Safety net on top of the analytical sizing above: real devices/browsers
+  // can differ in clamp()/font metrics, sub-pixel rounding, or (iOS Safari
+  // especially) a dynamic toolbar changing the viewport after layout --
+  // none of which a single synthetic test environment can fully rule out.
+  // After layout actually settles, measure for real and grow the row if
+  // anything still pokes past its bottom edge, rather than trusting the
+  // math alone.
+  const settleDelay = isFreshDeal ? 420 : 30;
+  const handSizeAtSchedule = hand.length;
+  setTimeout(() => {
+    if (lastHandCount !== handSizeAtSchedule) return; // a newer hand has since rendered
+    const rowRect = row.getBoundingClientRect();
+    if (rowRect.height === 0) return; // not visible right now
+    let maxBottom = -Infinity;
+    row.querySelectorAll(".hand-card").forEach((el) => {
+      const cr = el.getBoundingClientRect();
+      if (cr.bottom > maxBottom) maxBottom = cr.bottom;
+    });
+    const overBy = maxBottom - rowRect.bottom;
+    if (overBy > 0.5) {
+      const current = parseFloat(row.style.minHeight) || 0;
+      row.style.minHeight = Math.ceil(current + overBy + 6) + "px";
+    }
+  }, settleDelay);
 }
 
 function renderScoreTable() {

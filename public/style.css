@@ -114,7 +114,7 @@ html, body {
 #screen-game { padding: 6px 10px; gap: 6px; }
 #game-topbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding-left: 100px; flex-shrink: 0; }
 .topbar-left { font-size: 12px; opacity: .85; }
-.topbar-mid { font-size: 14px; font-weight: 700; color: var(--gold); text-align: center; flex: 1; font-family: var(--font-display); letter-spacing: .3px; }
+.topbar-mid { font-size: 13px; font-weight: 700; color: var(--gold); text-align: center; flex: 1; font-family: var(--font-body); letter-spacing: .2px; }
 .badge-cluster { display: flex; gap: 6px; align-items: center; }
 .partner-badge, .power-badge {
   background: linear-gradient(160deg, #17624a, #0c3626); border: 1px solid rgba(230,191,92,.6); border-radius: 10px; padding: 3px 8px;
@@ -142,6 +142,12 @@ html, body {
     inset 0 0 55px rgba(0,0,0,.55),
     inset 0 0 0 3px rgba(230,191,92,.22),
     inset 0 0 0 7px rgba(0,0,0,.35);
+}
+#table-area::before {
+  content: "K3";
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-display); font-size: min(18vh, 15vw); font-weight: 700;
+  color: rgba(230,191,92,.05); letter-spacing: 4px; pointer-events: none; user-select: none;
 }
 .seat-ring { position: absolute; inset: 0; }
 .seat {
@@ -269,6 +275,13 @@ html, body {
   display: flex; overflow-x: auto; overflow-y: hidden;
   padding: 0 4px; min-height: calc(var(--card-h) + 46px); align-items: flex-start;
   flex-shrink: 0;
+}
+/* When the fan overflows, fade its edges so an off-screen card is an
+   obvious "there's more, swipe" cue instead of looking like the hand
+   just ends there. */
+.hand-row.scrollable {
+  mask-image: linear-gradient(to right, transparent 0, black 18px, black calc(100% - 18px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0, black 18px, black calc(100% - 18px), transparent 100%);
 }
 .hand-card {
   flex: 0 0 auto; cursor: pointer;
