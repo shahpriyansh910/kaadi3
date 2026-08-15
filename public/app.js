@@ -480,7 +480,9 @@ function renderActionPanel(r, mySeat) {
     const passBtn = document.createElement("button");
     passBtn.className = "action-btn pass";
     passBtn.textContent = "Pass";
-    passBtn.disabled = r.activeSeats.length <= 1;
+    // Anyone may pass, including the last active bidder -- if literally
+    // everyone passes, the seat next to the dealer is auto-stuck with the
+    // minimum bid server-side rather than forcing a manual bid here.
     passBtn.onclick = () => send({ type: "pass" });
     wrap.append(minus, val, plus, bidBtn, passBtn);
     panel.appendChild(wrap);

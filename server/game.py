@@ -94,7 +94,11 @@ class Round:
 
     # ---------------- bidding ----------------
     def can_pass(self, seat):
-        return len(self.active_seats) > 1
+        # Anyone may always pass, including the last remaining active seat --
+        # an all-pass round is a real, handled outcome (see _advance_bidding),
+        # not something we need to prevent by forcing a manual bid out of
+        # whoever's left.
+        return True
 
     def place_bid(self, seat, amount):
         if self.phase != PHASE_BIDDING or seat != self.turn_seat:
@@ -111,19 +115,29 @@ class Round:
     def pass_bid(self, seat):
         if self.phase != PHASE_BIDDING or seat != self.turn_seat:
             raise ValueError("not your turn")
-        if not self.can_pass(seat):
-            raise ValueError("you must bid, you are the last active bidder")
         self.active_seats.discard(seat)
         self.bid_history.append({"seat": seat, "action": "pass", "amount": None})
         self._advance_bidding()
 
     def _advance_bidding(self):
+        if len(self.active_seats) == 0:
+            # Everyone passed -- nobody wanted to bid. House rule: rather
+            # than force a re-deal, the seat next to the dealer (first to
+            # act) is stuck with the minimum bid and play proceeds normally
+            # from there.
+            n = self.room.num_players
+            fallback_seat = (self.dealer_seat + 1) % n
+            self.bid_history.append({"seat": fallback_seat, "action": "forced_min_bid", "amount": self.bid_lo})
+            self._finish_bidding(fallback_seat, self.bid_lo)
+            return
         if len(self.active_seats) == 1:
             last = next(iter(self.active_seats))
             if self.highest_bidder == last:
                 self._finish_bidding(last, self.highest_bid)
                 return
-            # last remaining player hasn't bid yet -- forced to bid next
+            # only one active seat left and they haven't bid yet -- give
+            # them the turn; they may still bid OR pass (a pass here falls
+            # through to the all-passed case above)
             self.turn_seat = last
             return
         n = self.room.num_players
