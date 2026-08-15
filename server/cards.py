@@ -67,8 +67,14 @@ def build_playing_deck(num_players: int, rng: random.Random = None):
 
     Returns a list of card dicts: {suit, rank, points, occurrence, id}
     'occurrence' is 1 or 2 -- for 2-deck games, which copy this card is,
-    determined by draw order in the shuffled deck (1st one dealt = 1st,
-    the later one = 2nd). For 1-deck games it is always 1.
+    an arbitrary tag (by position in the shuffled deck) used only to give
+    each physical copy a distinct card id in a hand. For 1-deck games it
+    is always 1.
+
+    NOTE: this tag is NOT what "1st"/"2nd" means when calling a partner --
+    that's resolved dynamically by play order instead (see game.py's
+    select_partner/play_card), since no player can observe deal-order at
+    the table. Don't reuse this field for that.
     """
     rng = rng or random
     num_decks = num_decks_for(num_players)

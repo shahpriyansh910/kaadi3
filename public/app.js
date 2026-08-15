@@ -527,7 +527,7 @@ function renderActionPanel(r, mySeat) {
       hint.style.opacity = "0.65";
       hint.style.marginTop = "-2px";
       hint.style.marginBottom = "4px";
-      hint.textContent = "1st/2nd = which copy was dealt out, not who plays it first — the partner reveals when whoever holds that exact copy plays it";
+      hint.textContent = "1st/2nd = whichever copy is played first/second in the round — the partner reveals the moment that copy is played";
       panel.appendChild(hint);
     }
 

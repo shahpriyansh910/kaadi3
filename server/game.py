@@ -46,7 +46,7 @@ class PartnerSlot:
         self.suit = suit
         self.rank = rank
         self.occurrence = occurrence
-        self.owner_seat = None  # resolved silently at selection time
+        self.owner_seat = None  # resolved once the Nth copy is actually played
         self.revealed = False
 
 
@@ -86,6 +86,7 @@ class Round:
         self.lead_suit = None
         self.trick_number = 0
         self.cards_played_count = 0
+        self.play_count_by_suit_rank = {}  # (suit, rank) -> how many copies played so far
         self.points_won = {s: 0 for s in range(n)}  # points captured by trick-winning seat
         self.trick_winner_history = []
         self.last_trick = None  # for brief UI display after each trick
@@ -163,28 +164,27 @@ class Round:
             for suit, ranks in opts.items()
         }
 
-    def _find_owner_seat(self, suit, rank, occurrence):
-        for seat, hand in self.hands.items():
-            for c in hand:
-                if c["suit"] == suit and c["rank"] == rank and c["occurrence"] == occurrence:
-                    return seat
-        return None
-
     def select_partner(self, seat, suit, rank, occurrence):
         if self.phase != PHASE_PARTNER_SELECT or seat != self.caller_seat:
             raise ValueError("not allowed")
         if len(self.partner_slots) >= self.partners_needed:
             raise ValueError("all partner slots already filled")
-        owner = self._find_owner_seat(suit, rank, occurrence)
-        if owner is None:
+        # "1st"/"2nd" means chronological play order within the round (the
+        # 1st time this suit+rank is played, however many copies exist) --
+        # not which physical deck-copy it happens to be. That's the only
+        # definition a player can actually reason about live, since
+        # duplicate cards are otherwise indistinguishable before either is
+        # played. So at selection time we only validate that `occurrence`
+        # copies of this card genuinely exist in this round's deck --
+        # nobody (owner included) can know who'll hold the "1st played" one
+        # until it's actually played, since that depends on future choices
+        # by whoever holds either copy.
+        opts = self.available_partner_options()
+        if occurrence not in opts.get(suit, {}).get(rank, []):
             raise ValueError("that card is not in play this round")
         if any(p.suit == suit and p.rank == rank and p.occurrence == occurrence for p in self.partner_slots):
             raise ValueError("that card was already requested")
         slot = PartnerSlot(suit, rank, occurrence)
-        slot.owner_seat = owner
-        if owner != self.caller_seat:
-            self.team_of[owner] = "caller"
-        # if owner == caller_seat: caller accidentally picked own card -> self-partner, no-op on team
         self.partner_slots.append(slot)
         if len(self.partner_slots) >= self.partners_needed:
             self._start_play()
@@ -221,10 +221,20 @@ class Round:
         self.trick_cards.append({"seat": seat, "card": card})
         self.cards_played_count += 1
 
-        # partner reveal check
+        # partner reveal check -- keyed on chronological play order (the Nth
+        # time this suit+rank has now been played this round), not the
+        # static per-card occurrence tag. See select_partner() for why.
+        key = (card["suit"], card["rank"])
+        self.play_count_by_suit_rank[key] = self.play_count_by_suit_rank.get(key, 0) + 1
+        play_n = self.play_count_by_suit_rank[key]
         for slot in self.partner_slots:
-            if not slot.revealed and slot.suit == card["suit"] and slot.rank == card["rank"] and slot.occurrence == card["occurrence"]:
+            if not slot.revealed and slot.suit == card["suit"] and slot.rank == card["rank"] and slot.occurrence == play_n:
                 slot.revealed = True
+                slot.owner_seat = seat
+                if seat != self.caller_seat:
+                    self.team_of[seat] = "caller"
+                # if seat == caller_seat: caller's own card came up as the
+                # Nth play -- self-partner, no-op on team (already "caller")
 
         n = self.room.num_players
         if len(self.trick_cards) == n:
