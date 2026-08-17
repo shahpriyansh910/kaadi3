@@ -5,3 +5,15 @@ venv/
 .env
 *.log
 Prompt.txt
+
+# training-only artifacts -- torch checkpoints aren't needed in the repo
+# (bot_model.npz, the numpy export bot.py actually loads, IS committed)
+*.pt
+bot_model_ckpt.pt
+
+# server/data/games.jsonl is the LIVE server's runtime log -- ephemeral on
+# Render's free tier (wiped every redeploy), never the source of truth.
+# The durable, git-committed copy lives at data/games_archive.jsonl instead,
+# built by periodically pulling /admin/export-games and merging (see
+# server/game_logger.py's module docstring).
+server/data/

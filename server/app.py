@@ -1,8 +1,9 @@
+import hmac
 import logging
 import os
 import random
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -10,7 +11,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("kaadi3")
 
 import cards as C
-from game import Room, gen_room_code, PHASE_LOBBY, PHASE_PLAYING
+from game import Room, gen_room_code, PHASE_LOBBY, PHASE_PLAYING, PHASE_ROUND_END
+import game_logger
 
 app = FastAPI()
 
@@ -117,6 +119,15 @@ async def broadcast(room: Room):
             conns.pop(pid, None)
 
 
+async def advance_and_broadcast(room: Room):
+    """Log the round to game_logger the moment it ends, then broadcast --
+    replaces every plain `await broadcast(room)` call site so a completed
+    round is never missed no matter which action ended it."""
+    if room.round and room.round.phase == PHASE_ROUND_END:
+        game_logger.log_completed_round(room, room.round)
+    await broadcast(room)
+
+
 async def send_error(ws: WebSocket, message: str):
     try:
         await ws.send_json({"type": "error", "message": message})
@@ -173,7 +184,7 @@ async def ws_endpoint(websocket: WebSocket):
             await register_conn(new_code, player.id, websocket)
             code, pid = new_code, player.id
             await websocket.send_json({"type": "joined", "code": code, "playerId": pid})
-            await broadcast(room)
+            await advance_and_broadcast(room)
 
         elif mtype == "join_room":
             jcode = (msg.get("code") or "").strip().upper()
@@ -202,7 +213,7 @@ async def ws_endpoint(websocket: WebSocket):
             code, pid = jcode, player.id
             await register_conn(code, pid, websocket)
             await websocket.send_json({"type": "joined", "code": code, "playerId": pid})
-            await broadcast(room)
+            await advance_and_broadcast(room)
 
         elif mtype == "rejoin":
             jcode = (msg.get("code") or "").strip().upper()
@@ -220,7 +231,7 @@ async def ws_endpoint(websocket: WebSocket):
             room.players[pid].connected = True
             await register_conn(code, pid, websocket)
             await websocket.send_json({"type": "joined", "code": code, "playerId": pid})
-            await broadcast(room)
+            await advance_and_broadcast(room)
 
         else:
             room = rooms.get(code) if code else None
@@ -261,13 +272,13 @@ async def ws_endpoint(websocket: WebSocket):
                 if not room.players:
                     rooms.pop(code, None)
                     room_conns.pop(code, None)
-                await broadcast(room)
+                await advance_and_broadcast(room)
                 code = pid = None
                 return
             else:
                 raise ValueError(f"unknown message type {mtype}")
 
-            await broadcast(room)
+            await advance_and_broadcast(room)
 
     try:
         while True:
@@ -303,9 +314,29 @@ async def ws_endpoint(websocket: WebSocket):
                     room.players[pid].connected = False
                 conns.pop(pid, None)
                 try:
-                    await broadcast(room)
+                    await advance_and_broadcast(room)
                 except Exception:
                     logger.exception("error broadcasting after disconnect")
+
+
+@app.get("/admin/export-games")
+async def export_games(request: Request):
+    """Pull-before-deploy escape hatch for game_logger's local (ephemeral
+    on Render's free tier) log file -- returns its raw JSONL content so it
+    can be merged into the repo's data/ directory before the next deploy
+    wipes it. Gated on ADMIN_TOKEN: unset means the endpoint is disabled
+    entirely (fails closed), not "open to anyone"."""
+    admin_token = os.environ.get("ADMIN_TOKEN")
+    if not admin_token:
+        return Response(status_code=404)
+    provided = request.headers.get("X-Admin-Token", "")
+    if not hmac.compare_digest(provided, admin_token):
+        return Response(status_code=404)
+    if not os.path.exists(game_logger.LOG_PATH):
+        return Response(content="", media_type="text/plain")
+    with open(game_logger.LOG_PATH, "r", encoding="utf-8") as f:
+        content = f.read()
+    return Response(content=content, media_type="text/plain")
 
 
 app.mount("/", StaticFiles(directory=PUBLIC_DIR, html=True), name="static")

@@ -32,13 +32,14 @@ def bid_bounds(num_players: int):
 
 
 class Player:
-    def __init__(self, pid, name):
+    def __init__(self, pid, name, is_bot=False):
         self.id = pid
         self.name = name
         self.connected = True
         self.seat = None  # assigned at game start
         self.session_score = 0
         self.ws = None
+        self.is_bot = is_bot
 
 
 class PartnerSlot:
@@ -51,12 +52,14 @@ class PartnerSlot:
 
 
 class Round:
-    def __init__(self, room, dealer_seat, rng):
+    def __init__(self, room, dealer_seat, rng, deck_snapshot=None):
         self.room = room
         self.dealer_seat = dealer_seat
         self.rng = rng
         n = room.num_players
-        deck = C.build_playing_deck(n, rng)
+        # deck_snapshot lets a caller replay a previously-logged round
+        # exactly (see game_logger.py) instead of dealing a fresh shuffle.
+        deck = deck_snapshot if deck_snapshot is not None else C.build_playing_deck(n, rng)
         self.deck_snapshot = deck  # for validating partner-card choices
         start = (dealer_seat + 1) % n
         hands = C.deal_round_robin(deck, n)
@@ -92,6 +95,16 @@ class Round:
         self.last_trick = None  # for brief UI display after each trick
         self.round_result = None  # filled at round end
 
+        # Every mutating action taken this round, in order -- combined with
+        # deck_snapshot this is enough to fully replay/reconstruct the round
+        # later (deal_round_robin is deterministic given the deck + player
+        # count). Single source of truth: instrumented here in the actual
+        # game methods rather than duplicated in app.py/kaadi_env, so both
+        # human and bot moves are captured automatically no matter which
+        # code path drives them. See server/game_logger.py for what uses this.
+        self.action_log = []
+        self.logged = False  # set True once game_logger has persisted this round
+
     # ---------------- bidding ----------------
     def can_pass(self, seat):
         # Anyone may always pass, including the last remaining active seat --
@@ -110,6 +123,7 @@ class Round:
         self.highest_bid = amount
         self.highest_bidder = seat
         self.bid_history.append({"seat": seat, "action": "bid", "amount": amount})
+        self.action_log.append({"seat": seat, "type": "bid", "amount": amount})
         self._advance_bidding()
 
     def pass_bid(self, seat):
@@ -117,6 +131,7 @@ class Round:
             raise ValueError("not your turn")
         self.active_seats.discard(seat)
         self.bid_history.append({"seat": seat, "action": "pass", "amount": None})
+        self.action_log.append({"seat": seat, "type": "pass"})
         self._advance_bidding()
 
     def _advance_bidding(self):
@@ -162,6 +177,7 @@ class Round:
         if suit not in C.SUITS:
             raise ValueError("invalid suit")
         self.power_color = suit
+        self.action_log.append({"seat": seat, "type": "power_color", "suit": suit})
         if self.partners_needed == 0:
             self._start_play()
         else:
@@ -200,6 +216,7 @@ class Round:
             raise ValueError("that card was already requested")
         slot = PartnerSlot(suit, rank, occurrence)
         self.partner_slots.append(slot)
+        self.action_log.append({"seat": seat, "type": "partner", "suit": suit, "rank": rank, "occurrence": occurrence})
         if len(self.partner_slots) >= self.partners_needed:
             self._start_play()
 
@@ -234,6 +251,7 @@ class Round:
             self.lead_suit = card["suit"]
         self.trick_cards.append({"seat": seat, "card": card})
         self.cards_played_count += 1
+        self.action_log.append({"seat": seat, "type": "play", "cardId": card_id})
 
         # partner reveal check -- keyed on chronological play order (the Nth
         # time this suit+rank has now been played this round), not the
